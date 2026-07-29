@@ -1,0 +1,5 @@
+streamlit
+openai
+langchain-chroma
+langchain-huggingface
+sentence-transformers
