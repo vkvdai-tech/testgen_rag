@@ -71,10 +71,10 @@ Return ONLY a single JSON object with this exact format (no markdown codeblock, 
 {{"estimated_max": <integer count, e.g. 50, 150, 300>, "reason": "<brief 1-sentence reason>"}}
 """
         try:
+            # Temperature parameter removed for gpt-5.6-luna compatibility
             res = client.chat.completions.create(
                 model=PRIMARY_MODEL,
-                messages=[{"role": "user", "content": estimate_prompt}],
-                temperature=0.2
+                messages=[{"role": "user", "content": estimate_prompt}]
             )
             raw = res.choices[0].message.content.strip()
             data = json.loads(raw)
@@ -159,13 +159,13 @@ Guidelines:
 Number starting from {len(generated_mcqs) + 1}.
 """
         try:
+            # Temperature parameter removed for gpt-5.6-luna compatibility
             res = client.chat.completions.create(
                 model=PRIMARY_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a precise UPSC examination paper setter."},
                     {"role": "user", "content": prompt}
-                ],
-                temperature=0.4
+                ]
             )
             batch_output = res.choices[0].message.content
             generated_mcqs.append(batch_output)
