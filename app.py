@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import streamlit as st
 from openai import OpenAI
 from langchain_chroma import Chroma
@@ -49,6 +50,8 @@ if "max_estimate" not in st.session_state:
     st.session_state.max_estimate = None
 if "selected_count" not in st.session_state:
     st.session_state.selected_count = 10
+if "analyzed_topic" not in st.session_state:
+    st.session_state.analyzed_topic = None
 
 # Step 1: Uncapped Capacity Estimation
 if st.button("🔍 Estimate Max Question Capacity"):
@@ -67,26 +70,33 @@ You are an expert UPSC paper setter. Analyze the following reference text and es
 {context}
 --------------
 
-Return ONLY a single JSON object with this exact format (no markdown codeblock, no explanation):
-{{"estimated_max": <integer count, e.g. 50, 150, 300>, "reason": "<brief 1-sentence reason>"}}
+Return a single valid JSON object strictly in this structure:
+{{"estimated_max": 150, "reason": "Detailed context covering multiple aspects."}}
 """
         try:
-            # Temperature parameter removed for gpt-5.6-luna compatibility
             res = client.chat.completions.create(
                 model=PRIMARY_MODEL,
-                messages=[{"role": "user", "content": estimate_prompt}]
+                messages=[
+                    {"role": "system", "content": "You are an assistant that outputs strictly valid JSON."},
+                    {"role": "user", "content": estimate_prompt}
+                ],
+                response_format={"type": "json_object"}
             )
             raw = res.choices[0].message.content.strip()
-            data = json.loads(raw)
+            
+            # Clean markdown code blocks if model includes them
+            cleaned_raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+            data = json.loads(cleaned_raw)
+            
             st.session_state.max_estimate = int(data.get("estimated_max", 50))
-            st.session_state.reason = data.get("reason", "")
+            st.session_state.reason = data.get("reason", "Depth calculated successfully.")
             st.session_state.analyzed_topic = topic
+            st.session_state.selected_count = st.session_state.max_estimate
         except Exception as e:
-            st.error(f"❌ `{PRIMARY_MODEL}` API Error: {e}")
-            st.stop()
+            st.error(f"❌ `{PRIMARY_MODEL}` API / Parse Error: {e}")
 
-# Display AI Preset Buttons
-if st.session_state.max_estimate and st.session_state.get("analyzed_topic") == topic:
+# Display AI Preset Buttons if estimated for current topic
+if st.session_state.max_estimate and st.session_state.analyzed_topic == topic:
     max_q = st.session_state.max_estimate
     st.success(f"🎯 **AI Estimation ({PRIMARY_MODEL})**: Up to **{max_q} distinct MCQs** can be generated.")
     st.caption(f"*Context note: {st.session_state.get('reason', '')}*")
@@ -159,7 +169,6 @@ Guidelines:
 Number starting from {len(generated_mcqs) + 1}.
 """
         try:
-            # Temperature parameter removed for gpt-5.6-luna compatibility
             res = client.chat.completions.create(
                 model=PRIMARY_MODEL,
                 messages=[
@@ -175,7 +184,7 @@ Number starting from {len(generated_mcqs) + 1}.
             break
 
     if generated_mcqs:
-        status_text.success(f"Successfully generated {len(generated_mcqs) * batch_size if len(generated_mcqs) == batches_count else len(generated_mcqs)} questions strictly using {PRIMARY_MODEL}!")
+        status_text.success(f"Successfully generated questions strictly using {PRIMARY_MODEL}!")
         
         full_test_paper = "\n\n---\n\n".join(generated_mcqs)
         st.markdown("## Generated Question Bank")
