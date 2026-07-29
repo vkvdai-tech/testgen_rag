@@ -3,3 +3,4 @@ openai
 langchain-chroma
 langchain-huggingface
 sentence-transformers
+duckduckgo-search
