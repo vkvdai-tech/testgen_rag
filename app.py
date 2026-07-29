@@ -30,62 +30,141 @@ def load_vector_db():
 
 vector_db = load_vector_db()
 
+# Topic Input
 topic = st.text_input("Enter Topic or Question Area:", "Basic Structure doctrine and Kesavananda Bharati case")
 
-if st.button("Generate MCQ", type="primary"):
-    with st.spinner("Retrieving context from polity corpus..."):
-        results = vector_db.similarity_search_with_score(topic, k=4)
-        context_blocks = []
-        for doc, score in results:
-            source = os.path.basename(doc.metadata.get("source", "Unknown"))
-            page = doc.metadata.get("page", "N/A")
-            context_blocks.append(f"[Source: {source}, Page: {page}]\n{doc.page_content.strip()}")
+# Initialize session state for topic analysis
+if "analyzed_topic" not in st.session_state:
+    st.session_state.analyzed_topic = None
+if "max_recommended" not in st.session_state:
+    st.session_state.max_recommended = 5
+
+# Step 1: Capacity Estimation
+if st.button("🔍 Analyze Available Context & Estimate Capacity"):
+    with st.spinner("Scanning ChromaDB corpus and evaluating topic depth..."):
+        # Retrieve context relevant to topic
+        results = vector_db.similarity_search_with_score(topic, k=10)
+        context_blocks = [
+            f"[Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
+            for doc, score in results
+        ]
         context = "\n\n---\n\n".join(context_blocks)
+        
+        # Ask LLM to estimate distinct question potential
+        estimate_prompt = f"""
+You are an expert UPSC paper setter. Analyze the following reference text and determine how many distinct, high-quality UPSC-level MCQs can be created without repetition or low-quality filler.
 
-    with st.spinner("Generating question with OpenAI..."):
-        prompt = f"""
-You are an expert UPSC Civil Services examination paper setter specializing in Indian Polity.
-Based strictly on the provided reference context below, create 1 high-quality UPSC-style Multiple Choice Question (MCQ).
-
---- REFERENCE CONTEXT ---
+--- CONTEXT ---
 {context}
-------------------------
+--------------
 
-Guidelines for Question Creation:
-1. Use standard UPSC formatting (2 or 3 statements, followed by "Which of the statements given above is/are correct?").
-2. Options pattern: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2.
-3. Include detailed explanation covering each statement.
-
-Format:
-**Question:**
-...
-**Options:**
-...
-**Correct Answer:** ...
-**Explanation:**
-...
+Return ONLY a single JSON object with this exact format (no markdown codeblock, no explanation):
+{{"estimated_max": <integer between 1 and 50>, "reason": "<brief 1-sentence reason>"}}
 """
         try:
-            response = client.chat.completions.create(
+            res = client.chat.completions.create(
+                model="gpt-5.6-luna",
+                messages=[{"role": "user", "content": estimate_prompt}],
+                temperature=0.2
+            )
+            raw = res.choices[0].message.content.strip()
+        except Exception:
+            res = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": estimate_prompt}],
+                temperature=0.2
+            )
+            raw = res.choices[0].message.content.strip()
+
+        import json
+        try:
+            data = json.loads(raw)
+            st.session_state.max_recommended = int(data.get("estimated_max", 10))
+            st.session_state.reason = data.get("reason", "")
+            st.session_state.analyzed_topic = topic
+        except Exception:
+            st.session_state.max_recommended = 10
+            st.session_state.reason = "Standard topic depth detected."
+            st.session_state.analyzed_topic = topic
+
+if st.session_state.analyzed_topic == topic:
+    st.info(f"💡 **AI Recommendation**: Up to **{st.session_state.max_recommended}** distinct MCQs can be generated for this topic.\n\n*Note: {st.session_state.get('reason', '')}*")
+
+# Step 2: User selects question count
+selected_count = st.slider(
+    "Select number of questions to generate:", 
+    min_value=1, 
+    max_value=max(st.session_state.max_recommended, 50), 
+    value=min(5, st.session_state.max_recommended)
+)
+
+if st.button("🚀 Generate Question Bank", type="primary"):
+    batch_size = 5
+    generated_mcqs = []
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    batches_count = (selected_count + batch_size - 1) // batch_size
+    
+    for b in range(batches_count):
+        current_batch_qty = min(batch_size, selected_count - len(generated_mcqs))
+        status_text.text(f"Generating batch {b+1} of {batches_count} ({current_batch_qty} questions)...")
+        
+        results = vector_db.similarity_search_with_score(topic, k=8)
+        context_blocks = [
+            f"[Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}, Pg: {doc.metadata.get('page', 'N/A')}]\n{doc.page_content.strip()}"
+            for doc, score in results
+        ]
+        context = "\n\n---\n\n".join(context_blocks)
+
+        prompt = f"""
+You are an expert UPSC Civil Services examination paper setter.
+Based on the reference context, generate {current_batch_qty} distinct UPSC-style MCQs.
+
+--- CONTEXT ---
+{context}
+---------------
+
+Guidelines:
+1. Standard UPSC 2-3 statement format.
+2. Options: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2.
+3. Detailed explanations covering each statement.
+
+Number starting from {len(generated_mcqs) + 1}.
+"""
+        try:
+            res = client.chat.completions.create(
                 model="gpt-5.6-luna",
                 messages=[
                     {"role": "system", "content": "You are a precise UPSC examination paper setter."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3
+                temperature=0.4
             )
-        except Exception as e:
-            st.warning("`gpt-5.6-luna` call encountered an error. Falling back to standard model...")
-            response = client.chat.completions.create(
+            batch_output = res.choices[0].message.content
+        except Exception:
+            res = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a precise UPSC examination paper setter."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3
+                temperature=0.4
             )
+            batch_output = res.choices[0].message.content
 
-        st.markdown(response.choices[0].message.content)
+        generated_mcqs.append(batch_output)
+        progress_bar.progress((b + 1) / batches_count)
 
-    with st.expander("🔍 View Retrieved Context Chunks"):
-        st.text(context)
+    status_text.success(f"Successfully generated {selected_count} questions!")
+    
+    full_test_paper = "\n\n---\n\n".join(generated_mcqs)
+    st.markdown("## Generated Question Bank")
+    st.markdown(full_test_paper)
+    
+    st.download_button(
+        label="📥 Download Test Paper (.txt)",
+        data=full_test_paper,
+        file_name=f"UPSC_Polity_{topic.replace(' ', '_')}.txt",
+        mime="text/plain"
+    )
