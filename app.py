@@ -65,25 +65,25 @@ Format:
 **Explanation:**
 ...
 """
-     try:
-    response = client.chat.completions.create(
-        model="gpt-5.6-luna",
-        messages=[
-            {"role": "system", "content": "You are a precise UPSC examination paper setter."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3
-    )
-except Exception as e:
-    st.warning("`gpt-5.6-luna` endpoint rejected. Falling back to standard model...")
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a precise UPSC examination paper setter."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3
-    )
+        try:
+            response = client.chat.completions.create(
+                model="gpt-5.6-luna",
+                messages=[
+                    {"role": "system", "content": "You are a precise UPSC examination paper setter."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3
+            )
+        except Exception as e:
+            st.warning("`gpt-5.6-luna` call encountered an error. Falling back to standard model...")
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a precise UPSC examination paper setter."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3
+            )
 
         st.markdown(response.choices[0].message.content)
 
