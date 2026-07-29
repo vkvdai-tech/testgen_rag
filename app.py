@@ -51,11 +51,11 @@ def fetch_web_context(query: str, max_results: int = 5) -> str:
         formatted = [f"[Web Source: {r.get('title', 'Web')}]\n{r.get('body', '')}" for r in results]
         return "\n\n".join(formatted)
     except Exception as e:
-        st.warning(f"⚠️ Live web retrieval paused ({e}). Continuing with LLM depth evaluation.")
+        st.warning(f"⚠️ Live web retrieval paused ({e}). Continuing with LLM evaluation.")
         return ""
 
 # Inputs
-topic = st.text_input("Enter Primary Topic:", "Right to Equality")
+topic = st.text_input("Enter Primary Topic:", "Anti-Defection Law")
 
 enable_web_search = st.checkbox(
     "🌐 Enable Live Web Search (supplement vector DB context)", 
@@ -65,7 +65,7 @@ enable_web_search = st.checkbox(
 
 custom_instructions = st.text_area(
     "Custom Focus or Interlinking Instructions (Optional):",
-    placeholder="e.g., Interlink this topic with judicial review, Article 21 cases, or relevant constitutional amendments."
+    placeholder="e.g., Interlink this topic with judicial review, Article 102/191, landmark 10th schedule cases."
 )
 
 # Session State Initializations
@@ -81,7 +81,6 @@ if "analyzed_topic" not in st.session_state:
 # Capacity Estimation Logic
 if st.button("🔍 Estimate Max Question Capacity"):
     with st.spinner("Analyzing topic depth with gpt-5.6-luna..."):
-        # 1. Query ChromaDB
         db_blocks = []
         try:
             db_results = vector_db.similarity_search_with_score(topic, k=8)
@@ -92,7 +91,6 @@ if st.button("🔍 Estimate Max Question Capacity"):
         except Exception:
             pass
         
-        # 2. Web Retrieval
         web_blocks = ""
         if enable_web_search:
             web_blocks = fetch_web_context(topic)
@@ -105,16 +103,14 @@ if st.button("🔍 Estimate Max Question Capacity"):
 
         estimate_prompt = f"""
 You are an expert UPSC Civil Services examination paper setter.
-Estimate the MAXIMUM total number of distinct, high-quality UPSC-level MCQs that can be created on the topic "{topic}".
-
-Consider standard UPSC syllabus depth for this topic along with any provided context.
+Estimate the MAXIMUM total number of distinct, high-quality UPSC-level MCQs that can be created strictly on the topic "{topic}".
 
 --- CONTEXT ---
 {combined_context}
 --------------
 
 Return a single valid JSON object strictly in this structure:
-{{"estimated_max": 50, "reason": "Detailed coverage of Articles 14 to 18 and landmark cases."}}
+{{"estimated_max": 50, "reason": "Detailed coverage of Tenth Schedule, 52nd Amendment, 91st Amendment, Speaker powers, and landmark judgments."}}
 """
         try:
             res = client.chat.completions.create(
@@ -187,37 +183,69 @@ if st.button("🚀 Generate Question Bank", type="primary"):
 
     for b in range(batches_count):
         current_batch_qty = min(batch_size, selected_count - len(generated_mcqs))
-        status_text.text(f"Generating batch {b+1} of {batches_count} ({current_batch_qty} questions)...")
+        status_text.text(f"Generating batch {b+1} of {batches_count} ({current_batch_qty} questions) on '{topic}'...")
         
-        db_results = vector_db.similarity_search_with_score(topic, k=6)
-        context_blocks = [
-            f"[Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
-            for doc, score in db_results if doc.page_content.strip()
-        ]
-        context = "\n\n---\n\n".join(context_blocks)
-        if enable_web_search:
-            context += "\n\n" + fetch_web_context(topic, max_results=3)
+        # Retrieval with keyword/relevance filtering
+        context = ""
+        try:
+            db_results = vector_db.similarity_search_with_score(topic, k=6)
+            db_blocks = [
+                f"[Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
+                for doc, score in db_results if doc.page_content.strip()
+            ]
+            context = "\n\n---\n\n".join(db_blocks)
+        except Exception:
+            pass
+
+        if enable_web_search or not context.strip():
+            web_data = fetch_web_context(topic, max_results=3)
+            if web_data.strip():
+                context += "\n\n--- LIVE WEB CONTEXT ---\n\n" + web_data
 
         prompt = f"""
-You are an expert UPSC Civil Services examination paper setter.
-Based on the reference context, generate {current_batch_qty} distinct UPSC-style MCQs.
+You are an expert UPSC Civil Services Examination paper setter.
+
+PRIMARY MANDATE:
+Generate {current_batch_qty} distinct, high-quality UPSC Prelims MCQs STRICTLY on the topic: "{topic}".
+DO NOT generate questions about any other unrelated topic (e.g., UPSC body administration, Ramsar sites, Harappan culture, etc.). If the context contains off-topic material, IGNORE IT and rely on your core Indian Constitutional Polity knowledge on "{topic}".
 
 --- REFERENCE CONTEXT ---
-{context}
+{context if context.strip() else "No local vector context available. Rely strictly on official UPSC syllabus knowledge for " + topic + "."}
 ------------------------
 {extra_instructions_prompt}
-Guidelines:
-1. Standard UPSC 2-3 statement format per question.
-2. Options: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2.
-3. Include detailed explanations explaining why each statement is correct or incorrect.
 
-Number starting from {len(generated_mcqs) + 1}.
+FORMAT DIVERSITY (Rotate dynamically across these 18 UPSC Formats):
+1. Single-Correct Statement
+2. Standard Two-Statement (1 only, 2 only, Both 1 and 2, Neither 1 nor 2)
+3. Standard Three-Statement Combination
+4. Four-Statement Complex Combination
+5. Pairs Matching / Match List-I with List-II
+6. New UPSC Format: "How many of the above statements/pairs are correct?" (Only one, Only two, Only three, All four / None)
+7. Assertion (A) and Reason (R)
+8. Incorrect/False Statement Identification ("Which of the following is NOT correct?")
+9. Landmark Supreme Court Case / Judgment Identification
+10. Constitutional Article / Schedule / Amendment Identification
+11. Situation-Based / Practical Application Scenario
+12. Conceptual / Definition-Based Question
+13. Chronological Sequence / Historical Evolution
+14. Comparative Analysis (e.g., Union vs State, Pre-Amendment vs Post-Amendment)
+15. Exception / Limitation / Safeguard Identification
+16. Discretionary Powers / Role of Constitutional Functionaries
+17. Interlinked / Multi-Domain Concept Integration
+18. Passageway / Excerpt-Based Identification
+
+GUIDELINES:
+- Every question must be numbered sequentially starting from {len(generated_mcqs) + 1}.
+- Provide options clear and unambiguous.
+- Include a detailed "Answer" and comprehensive "Explanation" for each question.
+
+Start output immediately with Question {len(generated_mcqs) + 1}:
 """
         try:
             res = client.chat.completions.create(
                 model=PRIMARY_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a precise UPSC examination paper setter."},
+                    {"role": "system", "content": f"You are an expert UPSC Polity paper setter specializing in {topic}."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -229,7 +257,7 @@ Number starting from {len(generated_mcqs) + 1}.
             break
 
     if generated_mcqs:
-        status_text.success(f"Successfully generated questions strictly using {PRIMARY_MODEL}!")
+        status_text.success(f"Successfully generated question bank strictly using {PRIMARY_MODEL}!")
         full_test_paper = "\n\n---\n\n".join(generated_mcqs)
         st.markdown("## Generated Question Bank")
         st.markdown(full_test_paper)
