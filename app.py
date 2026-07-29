@@ -1,4 +1,5 @@
 import os
+import json
 import streamlit as st
 from openai import OpenAI
 from langchain_chroma import Chroma
@@ -31,35 +32,34 @@ def load_vector_db():
 vector_db = load_vector_db()
 
 # Topic Input
-topic = st.text_input("Enter Topic or Question Area:", "Basic Structure doctrine and Kesavananda Bharati case")
+topic = st.text_input("Enter Topic or Question Area:", "Right to Equality")
 
-# Initialize session state for topic analysis
-if "analyzed_topic" not in st.session_state:
-    st.session_state.analyzed_topic = None
-if "max_recommended" not in st.session_state:
-    st.session_state.max_recommended = 5
+# Initialize session state variables
+if "max_estimate" not in st.session_state:
+    st.session_state.max_estimate = None
+if "selected_count" not in st.session_state:
+    st.session_state.selected_count = 10
 
-# Step 1: Capacity Estimation
-if st.button("🔍 Analyze Available Context & Estimate Capacity"):
-    with st.spinner("Scanning ChromaDB corpus and evaluating topic depth..."):
-        # Retrieve context relevant to topic
-        results = vector_db.similarity_search_with_score(topic, k=10)
+# Step 1: Uncapped Estimation
+if st.button("🔍 Estimate Max Question Capacity"):
+    with st.spinner("Analyzing corpus context depth..."):
+        # Retrieve context proportional to topic size
+        results = vector_db.similarity_search_with_score(topic, k=12)
         context_blocks = [
             f"[Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
             for doc, score in results
         ]
         context = "\n\n---\n\n".join(context_blocks)
         
-        # Ask LLM to estimate distinct question potential
         estimate_prompt = f"""
-You are an expert UPSC paper setter. Analyze the following reference text and determine how many distinct, high-quality UPSC-level MCQs can be created without repetition or low-quality filler.
+You are an expert UPSC paper setter. Analyze the following reference text and estimate the MAXIMUM total number of distinct, high-quality UPSC-level MCQs that can be created on this topic without repeating concepts or generating low-quality filler.
 
 --- CONTEXT ---
 {context}
 --------------
 
 Return ONLY a single JSON object with this exact format (no markdown codeblock, no explanation):
-{{"estimated_max": <integer between 1 and 50>, "reason": "<brief 1-sentence reason>"}}
+{{"estimated_max": <integer count, e.g. 50, 150, 300>, "reason": "<brief 1-sentence reason>"}}
 """
         try:
             res = client.chat.completions.create(
@@ -76,28 +76,53 @@ Return ONLY a single JSON object with this exact format (no markdown codeblock, 
             )
             raw = res.choices[0].message.content.strip()
 
-        import json
         try:
             data = json.loads(raw)
-            st.session_state.max_recommended = int(data.get("estimated_max", 10))
+            st.session_state.max_estimate = int(data.get("estimated_max", 50))
             st.session_state.reason = data.get("reason", "")
             st.session_state.analyzed_topic = topic
         except Exception:
-            st.session_state.max_recommended = 10
+            st.session_state.max_estimate = 50
             st.session_state.reason = "Standard topic depth detected."
             st.session_state.analyzed_topic = topic
 
-if st.session_state.analyzed_topic == topic:
-    st.info(f"💡 **AI Recommendation**: Up to **{st.session_state.max_recommended}** distinct MCQs can be generated for this topic.\n\n*Note: {st.session_state.get('reason', '')}*")
+# Display AI options if estimation is complete
+if st.session_state.max_estimate and st.session_state.get("analyzed_topic") == topic:
+    max_q = st.session_state.max_estimate
+    st.success(f"🎯 **AI Estimation**: This topic can yield up to **{max_q} distinct MCQs**.")
+    st.caption(f"*Context note: {st.session_state.get('reason', '')}*")
+    
+    st.markdown("### Choose Question Volume:")
+    
+    # Calculate smart preset options based on AI estimate
+    opt_25 = max(5, round(max_q * 0.25))
+    opt_50 = max(10, round(max_q * 0.50))
+    opt_75 = max(15, round(max_q * 0.75))
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if st.button(f"📦 Quick: {opt_25} MCQs"):
+            st.session_state.selected_count = opt_25
+    with col2:
+        if st.button(f"📘 Standard: {opt_50} MCQs"):
+            st.session_state.selected_count = opt_50
+    with col3:
+        if st.button(f"📚 Large: {opt_75} MCQs"):
+            st.session_state.selected_count = opt_75
+    with col4:
+        if st.button(f"🔥 Full: {max_q} MCQs"):
+            st.session_state.selected_count = max_q
 
-# Step 2: User selects question count
-selected_count = st.slider(
-    "Select number of questions to generate:", 
+# Allow fine-tuning or manual selection
+selected_count = st.number_input(
+    "Selected Quantity to Generate:", 
     min_value=1, 
-    max_value=max(st.session_state.max_recommended, 50), 
-    value=min(5, st.session_state.max_recommended)
+    max_value=1000, 
+    value=st.session_state.selected_count,
+    step=5
 )
 
+# Step 2: Iterative Generation Pipeline
 if st.button("🚀 Generate Question Bank", type="primary"):
     batch_size = 5
     generated_mcqs = []
@@ -126,7 +151,7 @@ Based on the reference context, generate {current_batch_qty} distinct UPSC-style
 ---------------
 
 Guidelines:
-1. Standard UPSC 2-3 statement format.
+1. Standard UPSC 2-3 statement format per question.
 2. Options: (a) 1 only, (b) 2 only, (c) Both 1 and 2, (d) Neither 1 nor 2.
 3. Detailed explanations covering each statement.
 
