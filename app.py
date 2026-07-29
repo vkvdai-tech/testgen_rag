@@ -45,10 +45,10 @@ custom_instructions = st.text_area(
     help="Add specific rules for how the AI should frame or link the concepts."
 )
 
-# Initialize session state variables
+# Initialize session state variables securely
 if "max_estimate" not in st.session_state:
     st.session_state.max_estimate = None
-if "selected_count" not in st.session_state:
+if "selected_count" not in st.session_state or st.session_state.selected_count < 1:
     st.session_state.selected_count = 10
 if "analyzed_topic" not in st.session_state:
     st.session_state.analyzed_topic = None
@@ -84,11 +84,12 @@ Return a single valid JSON object strictly in this structure:
             )
             raw = res.choices[0].message.content.strip()
             
-            # Clean markdown code blocks if model includes them
+            # Clean markdown code blocks if present
             cleaned_raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
             data = json.loads(cleaned_raw)
             
-            st.session_state.max_estimate = int(data.get("estimated_max", 50))
+            # Ensure estimated capacity is at least 1
+            st.session_state.max_estimate = max(1, int(data.get("estimated_max", 50)))
             st.session_state.reason = data.get("reason", "Depth calculated successfully.")
             st.session_state.analyzed_topic = topic
             st.session_state.selected_count = st.session_state.max_estimate
@@ -102,9 +103,10 @@ if st.session_state.max_estimate and st.session_state.analyzed_topic == topic:
     st.caption(f"*Context note: {st.session_state.get('reason', '')}*")
     
     st.markdown("### Choose Question Volume:")
-    opt_25 = max(5, round(max_q * 0.25))
-    opt_50 = max(10, round(max_q * 0.50))
-    opt_75 = max(15, round(max_q * 0.75))
+    # Guaranteed minimum of 1 for all options
+    opt_25 = max(1, round(max_q * 0.25))
+    opt_50 = max(1, round(max_q * 0.50))
+    opt_75 = max(1, round(max_q * 0.75))
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -120,14 +122,20 @@ if st.session_state.max_estimate and st.session_state.analyzed_topic == topic:
         if st.button(f"🔥 Full: {max_q}"):
             st.session_state.selected_count = max_q
 
+# Sanity check before rendering input box to prevent StreamlitValueBelowMinError
+safe_value = max(1, int(st.session_state.get("selected_count", 10)))
+
 # Quantity Selector
 selected_count = st.number_input(
     "Selected Quantity to Generate:", 
     min_value=1, 
     max_value=1000, 
-    value=st.session_state.selected_count,
+    value=safe_value,
     step=5
 )
+
+# Keep session state updated with manual user input
+st.session_state.selected_count = selected_count
 
 # Step 2: Generation Pipeline
 if st.button("🚀 Generate Question Bank", type="primary"):
