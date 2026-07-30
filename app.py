@@ -16,7 +16,7 @@ except ImportError:
 st.set_page_config(page_title="UPSC Polity MCQ Generator (V36 Elite)", page_icon="📚", layout="centered")
 
 st.title("📚 UPSC Polity MCQ Generator")
-st.caption("Powered by ChromaDB, Web Search & OpenAI (gpt-5.6-luna) | Master Prompt V36 Engine")
+st.caption("Powered by Constitution Bare Act, Indian Kanoon, Web Search & OpenAI (gpt-5.6-luna)")
 
 # API Key handling
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
@@ -40,28 +40,40 @@ def load_vector_db():
 
 vector_db = load_vector_db()
 
-# Safe Web Search Helper
-def fetch_web_context(query: str, max_results: int = 5) -> str:
+# Safe Web Search Helper (General Web + PRS)
+def fetch_web_context(query: str, max_results: int = 3) -> str:
     if not HAS_DDG:
         return ""
     try:
-        results = DDGS().text(keywords=f"UPSC Polity {query}", max_results=max_results)
+        results = DDGS().text(keywords=f"UPSC Polity {query} PRS Legislative Research", max_results=max_results)
         if not results:
             return ""
-        formatted = [f"[Web Source: {r.get('title', 'Web')}]\n{r.get('body', '')}" for r in results]
+        formatted = [f"[Web/PRS Source: {r.get('title', 'Web')}]\n{r.get('body', '')}" for r in results]
         return "\n\n".join(formatted)
     except Exception as e:
-        st.warning(f"⚠️ Live web retrieval paused ({e}). Continuing with LLM depth evaluation.")
         return ""
 
-# Inputs
+# Safe Indian Kanoon Helper (Fetches SC precedents)
+def fetch_kanoon_context(query: str, max_results: int = 3) -> str:
+    if not HAS_DDG:
+        return ""
+    try:
+        results = DDGS().text(keywords=f"site:indiankanoon.org Supreme Court {query} landmark judgment ratio", max_results=max_results)
+        if not results:
+            return ""
+        formatted = [f"[Indian Kanoon SC Precedent: {r.get('title', 'Kanoon')}]\n{r.get('body', '')}" for r in results]
+        return "\n\n".join(formatted)
+    except Exception as e:
+        return ""
+
+# UI Inputs
 topic = st.text_input("Enter Micro-Topic / Primary Topic:", "Anti-Defection Law")
 
-enable_web_search = st.checkbox(
-    "🌐 Enable Live Web Search (supplement vector DB context)", 
-    value=True,
-    help="Fetches live web context alongside local ChromaDB context."
-)
+col_a, col_b = st.columns(2)
+with col_a:
+    enable_kanoon = st.checkbox("⚖️ Fetch Indian Kanoon Precedents", value=True)
+with col_b:
+    enable_web_search = st.checkbox("🌐 Enable PRS / Live Web Search", value=True)
 
 custom_instructions = st.text_area(
     "Custom Focus or Interlinking Instructions (Optional):",
@@ -80,24 +92,25 @@ if "analyzed_topic" not in st.session_state:
 
 # Capacity Estimation Logic
 if st.button("🔍 Estimate Max Question Capacity"):
-    with st.spinner("Analyzing topic depth with gpt-5.6-luna..."):
+    with st.spinner("Analyzing topic depth across Bare Act, Kanoon & Web sources with gpt-5.6-luna..."):
         db_blocks = []
         try:
             db_results = vector_db.similarity_search_with_score(topic, k=8)
             db_blocks = [
-                f"[DB Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
+                f"[Bare Act Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
                 for doc, score in db_results if doc.page_content.strip()
             ]
         except Exception:
             pass
         
-        web_blocks = ""
-        if enable_web_search:
-            web_blocks = fetch_web_context(topic)
+        kanoon_blocks = fetch_kanoon_context(topic) if enable_kanoon else ""
+        web_blocks = fetch_web_context(topic) if enable_web_search else ""
 
         combined_context = "\n\n---\n\n".join(db_blocks)
+        if kanoon_blocks:
+            combined_context += "\n\n--- INDIAN KANOON PRECEDENTS ---\n\n" + kanoon_blocks
         if web_blocks:
-            combined_context += "\n\n--- LIVE WEB CONTEXT ---\n\n" + web_blocks
+            combined_context += "\n\n--- LIVE WEB / PRS CONTEXT ---\n\n" + web_blocks
 
         st.session_state.last_context = combined_context
 
@@ -105,9 +118,9 @@ if st.button("🔍 Estimate Max Question Capacity"):
 You are an expert UPSC Civil Services examination paper setter, Constitutional Law Professor, and UPSC Psychometric Assessment Designer.
 Estimate the MAXIMUM total number of distinct, high-quality, non-repetitive UPSC-level MCQs that can be created STRICTLY on the micro-topic "{topic}".
 
---- CONTEXT ---
+--- MULTI-AUTHORITY CONTEXT ---
 {combined_context}
---------------
+------------------------------
 
 Return a single valid JSON object strictly in this structure:
 {{"estimated_max": 50, "reason": "Detailed conceptual coverage including constitutional inferences, statutory mechanics, and landmark Supreme Court judgments."}}
@@ -187,22 +200,29 @@ if st.button("🚀 Generate Question Bank", type="primary"):
         current_batch_qty = min(batch_size, selected_count - len(generated_mcqs))
         status_text.text(f"Generating batch {b+1} of {batches_count} ({current_batch_qty} questions) on '{topic}'...")
         
-        # Retrieval with keyword/relevance filtering
+        # 1. Local Bare Act Vector Search
         context = ""
         try:
             db_results = vector_db.similarity_search_with_score(topic, k=6)
             db_blocks = [
-                f"[Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
+                f"[Bare Act Source: {os.path.basename(doc.metadata.get('source', 'Doc'))}]\n{doc.page_content.strip()}"
                 for doc, score in db_results if doc.page_content.strip()
             ]
             context = "\n\n---\n\n".join(db_blocks)
         except Exception:
             pass
 
-        if enable_web_search or not context.strip():
-            web_data = fetch_web_context(topic, max_results=3)
+        # 2. Add Indian Kanoon Precedents
+        if enable_kanoon:
+            kanoon_data = fetch_kanoon_context(topic, max_results=2)
+            if kanoon_data.strip():
+                context += "\n\n--- INDIAN KANOON PRECEDENTS ---\n\n" + kanoon_data
+
+        # 3. Add Live Web/PRS Data
+        if enable_web_search:
+            web_data = fetch_web_context(topic, max_results=2)
             if web_data.strip():
-                context += "\n\n--- LIVE WEB CONTEXT ---\n\n" + web_data
+                context += "\n\n--- LIVE WEB / PRS CONTEXT ---\n\n" + web_data
 
         v36_prompt = f"""
 UPSC CSE PRELIMS ELITE QUESTION BANK – MASTER PROMPT (V36)
@@ -212,23 +232,21 @@ Using the provided micro-topic "{topic}" as the complete syllabus, generate an a
 
 STRICT TOPIC MANDATE:
 - Every question MUST be strictly focused on "{topic}".
-- DO NOT generate questions about any unrelated topic (e.g. UPSC organization administrative functions, NDA/CDS notifications, Ramsar sites, Harappan civilization, etc.).
-- If the provided reference context contains irrelevant information, DISREGARD THE CONTEXT and rely strictly on your expert knowledge of the Constitution of India and UPSC CSE syllabus regarding "{topic}".
+- DO NOT generate questions about any unrelated topic (e.g. UPSC organization administrative functions, NDA/CDS notifications, Ramsar sites, Harappan culture, etc.).
+- If the reference context contains off-topic text, DISREGARD IT and rely on the official Constitution of India Bare Act and Supreme Court precedents regarding "{topic}".
 
---- REFERENCE CONTEXT ---
-{context if context.strip() else "No local reference text found. Rely strictly on official Constitution of India and UPSC syllabus knowledge for " + topic + "."}
-------------------------
+--- CONSTITUTIONAL & JUDICIAL REFERENCE CONTEXT ---
+{context if context.strip() else "Rely strictly on official Constitution of India Bare Act and Supreme Court precedents for " + topic + "."}
+--------------------------------------------------
 {extra_instructions_prompt}
 
 KNOWLEDGE BASE & SOURCE HIERARCHY:
-1. Constitution of India (Bare Act, as amended)
-2. Supreme Court Judgments
-3. Official Government Sources (Constituent Assembly Debates, Parliamentary Documents, Law Commission Reports, PRS)
-4. Standard UPSC References (M. Laxmikanth, D.D. Basu, Subhash Kashyap, NCERT)
-5. Previous UPSC Prelims Papers (2011–2026) for language, reasoning, and elimination techniques.
+1. Constitution of India (Bare Act, as amended up to 106th Amendment)
+2. Supreme Court Judgments & Ratios (Indian Kanoon)
+3. Official Government & Parliamentary Sources (PRS, Law Commission)
+4. Standard UPSC References (Laxmikanth, D.D. Basu)
 
 QUESTION DESIGN & FORMATS:
-Design each question around a unique constitutional inference (purpose, scope, limitation, exception, evolution, judicial interpretation).
 Rotate dynamically across authentic UPSC formats:
 - Statement-Based Questions (2-6 statements) using options like 1 only, 2 only, Both 1 and 2, Neither 1 nor 2, 1 and 2 only, 1, 2 and 3, etc.
 - Pair-Based Questions / Matching using options like Only one pair, Only two pairs, Only three pairs, All pairs, No pair, etc.
