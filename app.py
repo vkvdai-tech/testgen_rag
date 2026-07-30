@@ -12,10 +12,25 @@ try:
 except ImportError:
     HAS_DDG = False
 
-st.set_page_config(page_title="UPSC Polity MCQ Generator (V36 Elite - 18 Formats)", page_icon="📚", layout="centered")
+st.set_page_config(page_title="UPSC Polity MCQ Generator (V36 Elite)", page_icon="📚", layout="centered")
+
+# --- RESET SESSION FUNCTION ---
+def reset_session():
+    keys_to_clear = ["max_estimate", "reason", "selected_count", "analyzed_topic", "last_context", "generated_paper"]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
 
 st.title("📚 UPSC Polity MCQ Generator")
 st.caption("Powered by Constitution Bare Act, Indian Kanoon, Web Search & OpenAI (gpt-5.6-luna)")
+
+# --- SIDEBAR CONTROLS ---
+with st.sidebar:
+    st.header("⚙️ App Controls")
+    st.markdown("Use reset to clear topic estimations and generated questions to start fresh.")
+    if st.button("🔄 Reset / Clear Session", use_container_width=True):
+        reset_session()
 
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
@@ -84,7 +99,15 @@ if "selected_count" not in st.session_state or st.session_state.selected_count <
 if "analyzed_topic" not in st.session_state:
     st.session_state.analyzed_topic = None
 
-if st.button("🔍 Estimate Max Question Capacity"):
+# Action buttons row
+btn_col1, btn_col2 = st.columns([3, 1])
+with btn_col1:
+    estimate_clicked = st.button("🔍 Estimate Max Question Capacity", use_container_width=True)
+with btn_col2:
+    if st.button("🔄 Reset", use_container_width=True):
+        reset_session()
+
+if estimate_clicked:
     with st.spinner("Analyzing topic depth across Bare Act, Kanoon & Web sources with gpt-5.6-luna..."):
         db_blocks = []
         try:
@@ -265,12 +288,22 @@ Start output directly with Question {len(generated_mcqs) + 1}:
     if generated_mcqs:
         status_text.success(f"Successfully generated question bank strictly using {PRIMARY_MODEL} (Master Prompt V36 with 18 Formats)!")
         full_test_paper = "\n\n---\n\n".join(generated_mcqs)
-        st.markdown("## Generated Question Bank")
-        st.markdown(full_test_paper)
-        
+        st.session_state.generated_paper = full_test_paper
+
+if "generated_paper" in st.session_state:
+    st.markdown("## Generated Question Bank")
+    st.markdown(st.session_state.generated_paper)
+    
+    col_d1, col_d2 = st.columns([3, 1])
+    with col_d1:
         st.download_button(
             label="📥 Download Test Paper (.txt)",
-            data=full_test_paper,
+            data=st.session_state.generated_paper,
             file_name=f"UPSC_Polity_{topic.replace(' ', '_')}_V36.txt",
-            mime="text/plain"
+            mime="text/plain",
+            use_container_width=True
         )
+    with col_d2:
+        if st.button("🗑️ Clear Paper", use_container_width=True):
+            del st.session_state.generated_paper
+            st.rerun()
