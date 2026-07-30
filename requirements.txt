@@ -2,5 +2,7 @@ streamlit
 openai
 langchain-chroma
 langchain-huggingface
+langchain-community
 sentence-transformers
 duckduckgo-search
+pypdf
