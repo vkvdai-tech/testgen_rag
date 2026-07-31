@@ -1,5 +1,7 @@
 streamlit
 openai
+anthropic
+google-genai
 langchain-chroma
 langchain-huggingface
 langchain-community
