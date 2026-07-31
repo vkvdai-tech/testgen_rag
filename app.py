@@ -3,6 +3,8 @@ import json
 import re
 import streamlit as st
 from openai import OpenAI
+import anthropic
+from google import genai
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -16,31 +18,83 @@ st.set_page_config(page_title="UPSC Polity MCQ Generator (V36 Elite)", page_icon
 
 # --- RESET SESSION FUNCTION ---
 def reset_session():
-    keys_to_clear = ["max_estimate", "reason", "selected_count", "analyzed_topic", "last_context", "generated_paper"]
+    keys_to_clear = [
+        "max_estimate", "reason", "selected_count", 
+        "analyzed_topic", "last_context", "generated_paper", 
+        "generated_questions_history"
+    ]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
     st.rerun()
 
 st.title("📚 UPSC Polity MCQ Generator")
-st.caption("Powered by Constitution Bare Act, Indian Kanoon, Web Search & OpenAI (gpt-5.6-luna)")
+st.caption("Powered by Constitution Bare Act, Indian Kanoon, Web Search & Multi-Model Engine")
 
-# --- SIDEBAR CONTROLS ---
+# --- SIDEBAR CONTROLS & MODEL SELECTOR ---
 with st.sidebar:
     st.header("⚙️ App Controls")
-    st.markdown("Use reset to clear topic estimations and generated questions to start fresh.")
+    
+    selected_provider = st.selectbox(
+        "🧠 Choose LLM Engine:",
+        ["OpenAI (gpt-5.6-luna)", "Claude (claude-3-5-sonnet)", "Gemini (gemini-2.5-pro)"]
+    )
+    
+    st.markdown("---")
+    st.markdown("Use reset to clear session history and prevent duplicate tracking across topics.")
     if st.button("🔄 Reset / Clear Session", use_container_width=True):
         reset_session()
 
-api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
-if not api_key:
-    st.error("Please configure OPENAI_API_KEY environment variable or Streamlit secrets.")
-    st.stop()
+# --- INITIALIZE API CLIENTS ---
+openai_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
+anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+gemini_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 
-client = OpenAI(api_key=api_key)
+openai_client = OpenAI(api_key=openai_key) if openai_key else None
+claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
+gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
+
+def call_llm(provider: str, system_prompt: str, user_prompt: str, json_mode: bool = False) -> str:
+    """Unified LLM router for OpenAI, Claude, and Gemini."""
+    if "OpenAI" in provider:
+        if not openai_client:
+            raise ValueError("OPENAI_API_KEY not found in secrets or environment!")
+        kwargs = {
+            "model": "gpt-5.6-luna",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        res = openai_client.chat.completions.create(**kwargs)
+        return res.choices[0].message.content.strip()
+
+    elif "Claude" in provider:
+        if not claude_client:
+            raise ValueError("ANTHROPIC_API_KEY not found in secrets or environment!")
+        res = claude_client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=4000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
+        )
+        return res.content[0].text.strip()
+
+    elif "Gemini" in provider:
+        if not gemini_client:
+            raise ValueError("GEMINI_API_KEY not found in secrets or environment!")
+        
+        prompt = f"{system_prompt}\n\n{user_prompt}"
+        res = gemini_client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=prompt,
+        )
+        return res.text.strip()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "chroma_db")
-PRIMARY_MODEL = "gpt-5.6-luna"
 
 @st.cache_resource
 def load_vector_db():
@@ -98,8 +152,9 @@ if "selected_count" not in st.session_state or st.session_state.selected_count <
     st.session_state.selected_count = 10
 if "analyzed_topic" not in st.session_state:
     st.session_state.analyzed_topic = None
+if "generated_questions_history" not in st.session_state:
+    st.session_state.generated_questions_history = []
 
-# Action buttons row
 btn_col1, btn_col2 = st.columns([3, 1])
 with btn_col1:
     estimate_clicked = st.button("🔍 Estimate Max Question Capacity", use_container_width=True)
@@ -108,7 +163,7 @@ with btn_col2:
         reset_session()
 
 if estimate_clicked:
-    with st.spinner("Analyzing topic depth across Bare Act, Kanoon & Web sources with gpt-5.6-luna..."):
+    with st.spinner(f"Analyzing topic depth using {selected_provider}..."):
         db_blocks = []
         try:
             db_results = vector_db.similarity_search_with_score(topic, k=8)
@@ -129,7 +184,6 @@ if estimate_clicked:
             combined_context += "\n\n--- LIVE WEB / PRS CONTEXT ---\n\n" + web_blocks
 
         estimate_prompt = f"""
-You are an expert UPSC Civil Services examination paper setter, Constitutional Law Professor, and UPSC Psychometric Assessment Designer.
 Estimate the MAXIMUM total number of distinct, high-quality, non-repetitive UPSC-level MCQs that can be created STRICTLY on the micro-topic "{topic}".
 
 --- MULTI-AUTHORITY CONTEXT ---
@@ -140,15 +194,12 @@ Return a single valid JSON object strictly in this structure:
 {{"estimated_max": 50, "reason": "Detailed conceptual coverage including constitutional inferences, statutory mechanics, and landmark Supreme Court judgments across 18 distinct UPSC question formats."}}
 """
         try:
-            res = client.chat.completions.create(
-                model=PRIMARY_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are an assistant that outputs strictly valid JSON."},
-                    {"role": "user", "content": estimate_prompt}
-                ],
-                response_format={"type": "json_object"}
+            raw = call_llm(
+                provider=selected_provider,
+                system_prompt="You are an assistant that outputs strictly valid JSON.",
+                user_prompt=estimate_prompt,
+                json_mode=True
             )
-            raw = res.choices[0].message.content.strip()
             cleaned_raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
             data = json.loads(cleaned_raw)
             
@@ -157,11 +208,11 @@ Return a single valid JSON object strictly in this structure:
             st.session_state.analyzed_topic = topic
             st.session_state.selected_count = st.session_state.max_estimate
         except Exception as e:
-            st.error(f"❌ `{PRIMARY_MODEL}` API / Parse Error: {e}")
+            st.error(f"❌ `{selected_provider}` API / Parse Error: {e}")
 
 if st.session_state.max_estimate and st.session_state.analyzed_topic == topic:
     max_q = st.session_state.max_estimate
-    st.success(f"🎯 **AI Capacity Estimation ({PRIMARY_MODEL})**: Up to **{max_q} distinct MCQs** can be generated across 18 UPSC formats.")
+    st.success(f"🎯 **AI Capacity Estimation ({selected_provider})**: Up to **{max_q} distinct MCQs** can be generated across 18 UPSC formats.")
     st.caption(f"*Context Note: {st.session_state.reason}*")
     
     opt_25 = max(3, round(max_q * 0.25))
@@ -189,6 +240,7 @@ st.session_state.selected_count = selected_count
 if st.button("🚀 Generate Question Bank", type="primary"):
     batch_size = 5
     generated_mcqs = []
+    st.session_state.generated_questions_history = []
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -202,7 +254,7 @@ if st.button("🚀 Generate Question Bank", type="primary"):
 
     for b in range(batches_count):
         current_batch_qty = min(batch_size, selected_count - len(generated_mcqs))
-        status_text.text(f"Generating batch {b+1} of {batches_count} ({current_batch_qty} questions) on '{topic}'...")
+        status_text.text(f"Generating batch {b+1} of {batches_count} ({current_batch_qty} questions) on '{topic}' using {selected_provider}...")
         
         context = ""
         try:
@@ -225,15 +277,23 @@ if st.button("🚀 Generate Question Bank", type="primary"):
             if web_data.strip():
                 context += "\n\n--- LIVE WEB / PRS CONTEXT ---\n\n" + web_data
 
+        history_str = ""
+        if st.session_state.generated_questions_history:
+            history_str = "\n\nCRITICAL DEDUPLICATION RULE:\nDo NOT reuse or restate any of the following statements or core premises already generated in previous questions:\n"
+            for idx, q_summary in enumerate(st.session_state.generated_questions_history, 1):
+                history_str += f"- Question Premise {idx}: {q_summary}\n"
+
         v36_prompt = f"""
 UPSC CSE PRELIMS ELITE QUESTION BANK – MASTER PROMPT (V36)
 
 OBJECTIVE:
 Using the provided micro-topic "{topic}" as the complete syllabus, generate an authentic UPSC CSE Prelims question batch of {current_batch_qty} questions matching the reasoning, language, difficulty, and psychometric quality of UPSC Prelims (2018–2026).
 
-STRICT TOPIC MANDATE:
+STRICT TOPIC & NO-DUPLICATE MANDATE:
 - Every question MUST be strictly focused on "{topic}".
-- DO NOT generate questions about any unrelated topic.
+- NO DUPLICATE STATEMENTS: Each individual statement across all questions MUST test a unique constitutional rule, exception, numerical threshold, or judicial precedent.
+- DO NOT rephrase or repeat previously generated statements, facts, or scenarios.
+{history_str}
 
 --- CONSTITUTIONAL & JUDICIAL REFERENCE CONTEXT ---
 {context if context.strip() else "Rely strictly on official Constitution of India Bare Act and Supreme Court precedents for " + topic + "."}
@@ -271,22 +331,26 @@ Number questions starting from {len(generated_mcqs) + 1}.
 Start output directly with Question {len(generated_mcqs) + 1}:
 """
         try:
-            res = client.chat.completions.create(
-                model=PRIMARY_MODEL,
-                messages=[
-                    {"role": "system", "content": SYSTEM_ROLE},
-                    {"role": "user", "content": v36_prompt}
-                ]
+            batch_output = call_llm(
+                provider=selected_provider,
+                system_prompt=SYSTEM_ROLE,
+                user_prompt=v36_prompt
             )
-            batch_output = res.choices[0].message.content
             generated_mcqs.append(batch_output)
+            
+            extracted_summaries = re.findall(r"Question \d+:.*?(?=(Statement|Consider|With reference|Which|$))", batch_output, re.DOTALL)
+            for summary in extracted_summaries:
+                clean_sum = re.sub(r"\s+", " ", str(summary)).strip()[:120]
+                if clean_sum:
+                    st.session_state.generated_questions_history.append(clean_sum)
+
             progress_bar.progress((b + 1) / batches_count)
         except Exception as e:
-            st.error(f"❌ Stopping generation due to `{PRIMARY_MODEL}` API Error on batch {b+1}: {e}")
+            st.error(f"❌ Stopping generation due to `{selected_provider}` API Error on batch {b+1}: {e}")
             break
 
     if generated_mcqs:
-        status_text.success(f"Successfully generated question bank strictly using {PRIMARY_MODEL} (Master Prompt V36 with 18 Formats)!")
+        status_text.success(f"Successfully generated question bank using {selected_provider}!")
         full_test_paper = "\n\n---\n\n".join(generated_mcqs)
         st.session_state.generated_paper = full_test_paper
 
@@ -306,4 +370,6 @@ if "generated_paper" in st.session_state:
     with col_d2:
         if st.button("🗑️ Clear Paper", use_container_width=True):
             del st.session_state.generated_paper
+            if "generated_questions_history" in st.session_state:
+                st.session_state.generated_questions_history = []
             st.rerun()
