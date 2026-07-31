@@ -307,6 +307,13 @@ def run_r1_retriever(micro_topic, requested_qty, custom_instr):
     kanoon_data = fetch_kanoon_context(micro_topic, max_results=3) if enable_kanoon else ""
     web_data = fetch_web_context(micro_topic, max_results=3) if enable_web_search else ""
 
+    # FALLBACK GUARDRAIL: Ensure chunks are never empty so the LLM doesn't generate meta-questions
+    if not db_chunks and not kanoon_data and not web_data:
+        db_chunks.append({
+            "source": "Standard Constitutional Principles",
+            "content": f"Constitutional provisions, statutory frameworks, procedures, and landmark judicial decisions pertaining to {micro_topic} under the Indian Constitution."
+        })
+
     r1_prompt = f"""
 Act as a Senior Constitutional Researcher & Retrieval Planner.
 Topic: "{micro_topic}"
@@ -347,7 +354,7 @@ def run_v45_generator(evidence_package, qty):
 UPSC CSE PRELIMS ELITE QUESTION GENERATOR (V45 ENGINE)
 
 OBJECTIVE:
-Generate exactly {qty} authentic UPSC CSE Prelims MCQs grounded STRICTLY in the provided evidence package.
+Generate exactly {qty} authentic UPSC CSE Prelims MCQs grounded STRICTLY in Indian Constitutional Law and the provided evidence package.
 
 EVIDENCE PACKAGE:
 {json.dumps(evidence_package)}
@@ -373,15 +380,13 @@ You MUST dynamically rotate candidate questions across these 18 authentic UPSC C
 17. Union vs. State Discretionary Power Distinction
 18. Constitutional Amendment & Schedule Mapping
 
-STRICT TOPIC & CONCEPT DEDUPLICATION MANDATE:
-- NO DUPLICATE TOPICS OR CONCEPTS: Every question MUST test a unique, distinct constitutional rule, exception, numerical threshold, or judicial ratio.
-- NO STATEMENT REPETITION: Examine prior_questions_context carefully. Do NOT re-test or rephrase any concept, statement, or case precedent that was already covered in a previous question—even if presented in a different format!
-- Each specific concept on "{topic}" can only be tested ONCE across the entire generated paper.
+ZERO-TOLERANCE STRICT CONTENT RESTRICTIONS (CRITICAL):
+1. NEVER mention internal code concepts like 'evidence_package', 'evidence_chunks', 'prior_questions_context', 'JSON', 'metadata', or 'supplied package' anywhere in the question, options, or explanation.
+2. Every question MUST read like an authentic, official UPSC Civil Services Examination question testing Indian Law, Articles, Amendments, Case Ratios, and Constitutional Provisions.
 
-MANDATORY RULES:
-1. Ground every statement strictly in evidence_chunks from the package.
-2. Tag every question with its format_type from the 18-format registry above and its core competency.
-3. Provide a thorough explanation (75–120 words) detailing elimination logic.
+STRICT DEDUPLICATION RULES:
+- NO DUPLICATE CONCEPTS: Examine prior_questions_context carefully. Do NOT re-test any concept, statement, or case precedent already covered in earlier questions.
+- Each legal rule or provision on "{topic}" can only be tested ONCE in the paper.
 
 Return strictly a JSON object with this key:
 {{
@@ -390,7 +395,7 @@ Return strictly a JSON object with this key:
             "question_id": "Q-1",
             "format_type": "New UPSC Pattern (Quantitative Statement Matching)",
             "competency": "judicial_reasoning",
-            "tested_concept_summary": "Tests Speaker disqualification timeframe under Kihoto Hollohan precedent",
+            "tested_concept_summary": "Tests Speaker's disqualification timeframe under Kihoto Hollohan precedent",
             "question_text": "Consider the following statements regarding Anti-Defection Law...",
             "options": [
                 {{"label": "a", "text": "Only one"}},
