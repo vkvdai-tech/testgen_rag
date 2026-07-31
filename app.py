@@ -33,19 +33,29 @@ st.caption("Powered by Constitution Bare Act, Indian Kanoon, Web Search & Multi-
 
 # --- SIDEBAR CONTROLS & MODEL SELECTOR ---
 with st.sidebar:
-    st.header("⚙️ App Controls")
+    st.header("⚙️ Model Configuration")
     
+    # PROMINENT MODEL SELECTOR
     selected_provider = st.selectbox(
-        "🧠 Choose LLM Engine:",
-        ["OpenAI (gpt-5.6-luna)", "Claude (claude-3-5-sonnet)", "Gemini (gemini-2.5-pro)"]
+        "🧠 Select AI Model Engine:",
+        [
+            "OpenAI (gpt-5.6-luna)", 
+            "Claude (claude-3-5-sonnet)", 
+            "Gemini (gemini-2.5-pro)"
+        ],
+        index=0,
+        help="Choose which LLM provider will generate and analyze your UPSC MCQs."
     )
     
+    st.info(f"Active Engine: **{selected_provider}**")
+    
     st.markdown("---")
-    st.markdown("Use reset to clear session history and prevent duplicate tracking across topics.")
+    st.header("🛠️ Session Management")
+    st.markdown("Clear session history and reset deduplication state for new topics.")
     if st.button("🔄 Reset / Clear Session", use_container_width=True):
         reset_session()
 
-# --- INITIALIZE API CLIENTS ---
+# --- API CLIENT INITIALIZATION ---
 openai_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
 gemini_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
@@ -55,10 +65,10 @@ claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else
 gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
 
 def call_llm(provider: str, system_prompt: str, user_prompt: str, json_mode: bool = False) -> str:
-    """Unified LLM router for OpenAI, Claude, and Gemini."""
+    """Unified router for OpenAI, Claude, and Gemini."""
     if "OpenAI" in provider:
         if not openai_client:
-            raise ValueError("OPENAI_API_KEY not found in secrets or environment!")
+            raise ValueError("OPENAI_API_KEY is missing! Please configure it in .streamlit/secrets.toml or Streamlit Cloud Secrets.")
         kwargs = {
             "model": "gpt-5.6-luna",
             "messages": [
@@ -73,7 +83,7 @@ def call_llm(provider: str, system_prompt: str, user_prompt: str, json_mode: boo
 
     elif "Claude" in provider:
         if not claude_client:
-            raise ValueError("ANTHROPIC_API_KEY not found in secrets or environment!")
+            raise ValueError("ANTHROPIC_API_KEY is missing! Please configure it in .streamlit/secrets.toml or Streamlit Cloud Secrets.")
         res = claude_client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=4000,
@@ -84,7 +94,7 @@ def call_llm(provider: str, system_prompt: str, user_prompt: str, json_mode: boo
 
     elif "Gemini" in provider:
         if not gemini_client:
-            raise ValueError("GEMINI_API_KEY not found in secrets or environment!")
+            raise ValueError("GEMINI_API_KEY is missing! Please configure it in .streamlit/secrets.toml or Streamlit Cloud Secrets.")
         
         prompt = f"{system_prompt}\n\n{user_prompt}"
         res = gemini_client.models.generate_content(
@@ -131,6 +141,7 @@ def fetch_kanoon_context(query: str, max_results: int = 3) -> str:
     except Exception:
         return ""
 
+# MAIN TOPIC INPUT
 topic = st.text_input("Enter Micro-Topic / Primary Topic:", "Anti-Defection Law")
 
 col_a, col_b = st.columns(2)
