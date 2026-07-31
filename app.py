@@ -296,7 +296,7 @@ def run_r1_retriever(micro_topic, requested_qty, custom_instr):
     """STAGE 1: R1 RETRIEVAL AGENT - Constructs Structured Evidence Package"""
     db_chunks = []
     try:
-        db_results = vector_db.similarity_search_with_score(micro_topic, k=6)
+        db_results = vector_db.similarity_search_with_score(micro_topic, k=8)
         for doc, score in db_results:
             if doc.page_content.strip():
                 db_chunks.append({
@@ -306,8 +306,8 @@ def run_r1_retriever(micro_topic, requested_qty, custom_instr):
     except Exception:
         pass
 
-    kanoon_data = fetch_kanoon_context(micro_topic, max_results=2) if enable_kanoon else ""
-    web_data = fetch_web_context(micro_topic, max_results=2) if enable_web_search else ""
+    kanoon_data = fetch_kanoon_context(micro_topic, max_results=3) if enable_kanoon else ""
+    web_data = fetch_web_context(micro_topic, max_results=3) if enable_web_search else ""
 
     r1_prompt = f"""
 Act as a Senior Constitutional Researcher & Retrieval Planner.
@@ -342,8 +342,8 @@ Extract and package all authoritative legal evidence into a single clean JSON st
 
 
 def run_v45_generator(evidence_package, qty):
-    """STAGE 2: V45 GENERATION AGENT - Generates Candidate Questions"""
-    v45_system = "Act as a former UPSC Civil Services Examination Paper Setter and Senior Constitutional Law Professor."
+    """STAGE 2: V45 GENERATION AGENT - Generates Candidate Questions with 18 UPSC Formats"""
+    v45_system = "Act as a former UPSC Civil Services Examination Paper Setter, Constitutional Law Professor, and Psychometric Assessment Designer."
     
     v45_prompt = f"""
 UPSC CSE PRELIMS ELITE QUESTION GENERATOR (V45 ENGINE)
@@ -354,28 +354,49 @@ Generate exactly {qty} authentic UPSC CSE Prelims MCQs grounded STRICTLY in the 
 EVIDENCE PACKAGE:
 {json.dumps(evidence_package)}
 
-MANDATORY RULES:
-1. Ground every statement exclusively in evidence_chunks.
-2. Check against prior_questions_context to avoid repeating already-tested concepts.
-3. Tag every question with a competency: "identification" | "comparison" | "judicial_reasoning" | "institutional_relationship" | "evolution" | "application" | "exception".
-4. Provide a full explanation (75–120 words) with elimination logic for every question.
+MANDATORY 18-FORMAT SYSTEM REGISTRY:
+You MUST dynamically rotate candidate questions across these 18 authentic UPSC CSE Prelims formats:
+1. Classic 2-Statement Combination (1 only, 2 only, Both, Neither)
+2. Classic 3-Statement Combination (1 and 2 only, 2 and 3 only, etc.)
+3. 4-Statement High-Density Combination
+4. New UPSC Pattern (Quantitative Statement Matching: "How many of the above statements are correct? Only one / Only two / Only three / All four")
+5. Pair Matching (Traditional Column A vs Column B)
+6. Pair Matching (New Pattern: "How many of the above pairs are correctly matched? Only one pair / Only two pairs / Only three pairs / All pairs")
+7. Assertion-Reason (Standard: Both True & R is correct explanation, etc.)
+8. Assertion-Reason (Constitutional Logic / Ratio)
+9. Negative Statement Selection ("Which of the above statements is/are NOT correct?")
+10. Constitutional Definition / Philosophical Concept
+11. Application / Case-Scenario Based
+12. Exception / Limitation Based
+13. Chronological / Procedural Order
+14. Constitutional Body vs Statutory Body Distinction
+15. Multi-Article Interlinking
+16. Judicial Precedent & Ratio Matching
+17. Union vs. State Discretionary Power Distinction
+18. Constitutional Amendment & Schedule Mapping
+
+MANDATORY DEDUPLICATION & GROUNDING RULES:
+1. Ground every statement strictly in evidence_chunks from the package.
+2. Check against prior_questions_context to PREVENT repeating already-tested concepts, premises, or specific case ratios.
+3. Tag every question with its format_type from the 18-format registry above and its core competency.
+4. Provide a thorough explanation (75–120 words) detailing elimination logic.
 
 Return strictly a JSON object with this key:
 {{
     "candidate_questions": [
         {{
             "question_id": "Q-1",
-            "topic": "{topic}",
+            "format_type": "New UPSC Pattern (Quantitative Statement Matching)",
             "competency": "judicial_reasoning",
-            "question_text": "Consider the following statements...",
+            "question_text": "Consider the following statements regarding Anti-Defection Law...",
             "options": [
-                {{"label": "a", "text": "1 only"}},
-                {{"label": "b", "text": "2 only"}},
-                {{"label": "c", "text": "Both 1 and 2"}},
-                {{"label": "d", "text": "Neither 1 nor 2"}}
+                {{"label": "a", "text": "Only one"}},
+                {{"label": "b", "text": "Only two"}},
+                {{"label": "c", "text": "All three"}},
+                {{"label": "d", "text": "None"}}
             ],
             "correct_option": "b",
-            "explanation": "Statement 1 is incorrect because... Statement 2 is correct because...",
+            "explanation": "Statement 1 is correct... Statement 2 is incorrect...",
             "source_evidence_ids": ["EV-1"]
         }}
     ]
@@ -404,10 +425,13 @@ Candidate Questions: {json.dumps(candidate_questions)}
 Audit Criteria:
 1. Constitutional / Statutory Accuracy against Evidence Package.
 2. Exactly ONE indisputable correct answer.
-3. No duplicate concepts tested in prior_questions_context or current batch.
+3. ABSOLUTE NO DUPLICATES: Reject questions that duplicate concepts tested in prior_questions_context or current batch.
 4. Distractors represent realistic legal misconceptions (no trivial tricks).
 
 Classify EACH question as APPROVED, REVISE, or REJECT.
+- APPROVED: Perfect factual accuracy and unique premise.
+- REVISE: Minor phrasing issue but factually sound and non-duplicate.
+- REJECT: Major factual error, ambiguous option, or duplicate premise.
 
 Return strictly a JSON object:
 {{
@@ -453,16 +477,16 @@ if st.button("🚀 Generate Question Bank", type="primary"):
         try:
             evidence_pkg = run_r1_retriever(topic, current_batch_qty, custom_instructions)
         except Exception as e:
-            st.error(f"❌ Stage 1 Retrieval Error: {e}")
-            break
+            st.warning(f"⚠️ Batch {b+1} Stage 1 skipped due to transient error: {e}")
+            continue  # Continue to next batch instead of cancelling entire run
 
         # Stage 2: Generation
-        status_text.text(f"Batch {b+1}/{batches_count}: Running Stage 2 (V45 Generation Engine)...")
+        status_text.text(f"Batch {b+1}/{batches_count}: Running Stage 2 (V45 18-Format Generator)...")
         try:
             candidates = run_v45_generator(evidence_pkg, current_batch_qty)
         except Exception as e:
-            st.error(f"❌ Stage 2 Generation Error: {e}")
-            break
+            st.warning(f"⚠️ Batch {b+1} Stage 2 skipped due to transient error: {e}")
+            continue  # Skip batch on error
 
         # Stage 3: Independent Audit
         status_text.text(f"Batch {b+1}/{batches_count}: Running Stage 3 (R2 Quality & Duplicate Audit)...")
@@ -470,11 +494,11 @@ if st.button("🚀 Generate Question Bank", type="primary"):
             audit_decisions = run_r2_validator(candidates, evidence_pkg)
             st.session_state.audit_report_history.extend(audit_decisions)
             
-            # Filter only APPROVED questions
+            # Allow both APPROVED and REVISE decisions (Only drop REJECT)
             approved_ids = {
                 item["question_id"]: item 
                 for item in audit_decisions 
-                if item["decision"] == "APPROVED"
+                if item["decision"] in ["APPROVED", "REVISE"]
             }
             
             for q in candidates:
@@ -488,18 +512,21 @@ if st.button("🚀 Generate Question Bank", type="primary"):
                     })
 
         except Exception as e:
-            st.error(f"❌ Stage 3 Validation Error: {e}")
-            break
+            st.warning(f"⚠️ Batch {b+1} Stage 3 skipped due to transient error: {e}")
+            continue  # Skip batch on error
 
         progress_bar.progress((b + 1) / batches_count)
 
-    status_text.success(f"Pipeline Execution Complete! {len(approved_questions_master)} Approved Questions Generated.")
+    status_text.success(f"Pipeline Execution Complete! {len(approved_questions_master)} Validated Questions Generated.")
     
     # Format Approved Questions into Final Output Paper
     formatted_paper_blocks = []
     for idx, q in enumerate(approved_questions_master, 1):
         opts = "\n".join([f"({opt['label']}) {opt['text']}" for opt in q['options']])
-        block = f"### Question {idx}\n\n{q['question_text']}\n\n{opts}\n\n**Correct Option:** ({q['correct_option']})\n\n**Competency:** `{q.get('competency', 'N/A')}`\n\n**Explanation:**\n{q['explanation']}"
+        fmt = q.get('format_type', 'Standard')
+        comp = q.get('competency', 'N/A')
+        
+        block = f"### Question {idx}\n\n**Format:** `{fmt}` | **Competency:** `{comp}`\n\n{q['question_text']}\n\n{opts}\n\n**Correct Option:** ({q['correct_option']})\n\n**Explanation:**\n{q['explanation']}"
         formatted_paper_blocks.append(block)
         
     st.session_state.generated_paper = "\n\n---\n\n".join(formatted_paper_blocks)
